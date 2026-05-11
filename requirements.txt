@@ -1,6 +1,4 @@
 pandas
 numpy
-akshare
+yfinance
 openpyxl
-requests
-efinance
