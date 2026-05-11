@@ -1,0 +1,32 @@
+name: A-Share-Strategy-10-Alpha
+
+on:
+  workflow_dispatch: # 支持手动触发
+  schedule:
+    - cron: '35 1,6 * * 1-5' # 北京时间 09:35 和 14:35 运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run 10.0 Strategy
+        run: python main.py
+
+      - name: Sync Results to Repo
+        run: |
+          git config --global user.name "AlphaBot"
+          git config --global user.email "bot@strategy10.com"
+          git add index.xlsx
+          git commit -m "Auto-Update: Strategy 10.0 Analysis" || exit 0
+          git push
