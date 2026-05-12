@@ -1,108 +1,90 @@
-import yfinance as yf
 import pandas as pd
-import numpy as np
+import requests
 from datetime import datetime, timedelta
-import os, random, time
+import os, random
 
-def bot_v10_yahoo_full_strategy():
-    output_file = "index.xlsx"
-    # 物理删除旧文件，确保刷新
-    if os.path.exists(output_file): os.remove(output_file)
+def fetch_all_market_data():
+    """
+    深入思考：利用腾讯金融网关，实现全市场 5000 只股票一次性穿透抓取
+    这是避开 GitHub 海外 IP 封锁最稳定、最全量的通道
+    """
+    # 沪深全量 A 股请求地址
+    urls = [
+        "http://81.push2.eastmoney.com/api/qt/clist/get?pn=1&pz=5000&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:1,m:1+t:3&fields=f12,f14,f2,f3,f6,f22,f21,f20"
+    ]
     
-    bj_now_obj = datetime.utcnow() + timedelta(hours=8)
-    bj_now = bj_now_obj.strftime('%Y-%m-%d %H:%M:%S')
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "http://quote.eastmoney.com/"
+    }
 
-    # --- 深度思考：构建核心代码池 ---
-    # 雅虎不支持全市场扫描，建议在此处填入你需要监控的 100-300 只活跃标的
-    # 格式：沪市 .SS，深市 .SZ
-    ticker_list = ["600519.SS", "000001.SZ", "300750.SZ", "601318.SS", "600030.SS", "000756.SZ", "600418.SS"] 
+    try:
+        resp = requests.get(urls[0], headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()['data']['diff']
+            df = pd.DataFrame(data)
+            # 字段映射：f12:代码, f14:名称, f2:现价, f3:涨幅, f6:额, f22:量比, f21:换手, f20:市值
+            df.columns = ['price', 'amount', 'code', 'name', 'mkt_cap', 'hs', 'lb', 'zf']
+            return df
+    except:
+        return None
 
-    results = []
-    print(f"[{bj_now}] 启动雅虎穿透链路，执行 10.0 全因子筛选...")
+def bot_v10_real_strategy():
+    output_file = "index.xlsx"
+    bj_now = (datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
 
-    for t in ticker_list:
-        try:
-            # 抓取最近 10 天的数据，确保有足够的样本计算均量
-            tk = yf.Ticker(t)
-            hist = tk.history(period="10d")
-            info = tk.info # 用于获取股本和市值
-            
-            if len(hist) < 6: continue
-            
-            # --- 1. 基础数据提取 ---
-            latest = hist.iloc[-1]
-            prev = hist.iloc[-2]
-            
-            price = latest['Close']
-            zf = ((price - prev['Close']) / prev['Close']) * 100
-            volume = latest['Volume']
-            amount = price * volume
-            
-            # --- 2. 核心因子计算 (手动对齐 10.0 矩阵) ---
-            # A. 总市值 (mkt_cap) - 转换为亿元
-            mkt_cap = info.get('marketCap', 0) / 1e8
-            
-            # B. 量比 (lb) - 今日量 / 过去 5 日均量
-            avg_vol_5d = hist['Volume'].iloc[-6:-1].mean()
-            lb = volume / avg_vol_5d if avg_vol_5d > 0 else 1.0
-            
-            # C. 换手率 (hs) - 今日成交量 / 总股本 (估算)
-            shares_outstanding = info.get('sharesOutstanding', 1)
-            hs = (volume / shares_outstanding) * 100 if shares_outstanding > 1 else 0
+    # 1. 抓取全市场 (5000+) 数据
+    df = fetch_all_market_data()
+    
+    if df is None or df.empty:
+        pd.DataFrame({"STATUS": ["全网链路物理熔断"], "TIME": [bj_now]}).to_excel(output_file)
+        return
 
-            # --- 3. 【首席策略 10.0】筛选逻辑硬核植入 ---
-            # 因子拦截：1.5%<=zf<=4.8% | 1.5亿<=amount<=8.0亿 | 50亿<=市值<=200亿 | 5%<=换手<=10% | 量比>1
-            if (zf >= 1.5 and zf <= 4.8) and \
-               (amount >= 150_000_000 and amount <= 800_000_000) and \
-               (mkt_cap >= 50 and mkt_cap <= 200) and \
-               (hs >= 5.0 and hs <= 10.0) and \
-               (lb > 1.0):
+    # 2. 物理清洗：将所有字段转换为数值，确保 10.0 矩阵计算不报错
+    for col in ['price', 'zf', 'amount', 'lb', 'hs', 'mkt_cap']:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-                # --- 4. 筹码博弈运算 ---
-                # 能效比 Ratio
-                ratio = amount / (zf + 0.0001)
-                
-                # 评分矩阵 Score = 50 + (lb * 15) + (hs * 5)
-                score = 50 + (lb * 15) + (hs * 5)
-                
-                # 补偿 1：黄金堆积 (+25) -> lb 1.2-2.8 且 hs 3.0-7.5
-                if (1.2 <= lb <= 2.8) and (3.0 <= hs <= 7.5):
-                    score += 25
-                
-                # 补偿 2：高度控盘 (+15) -> Ratio < 65,000,000
-                if ratio < 65_000_000:
-                    score += 15
+    # 3. 【首席策略 10.0】硬核筛选矩阵 - 真正有意义的拦截
+    # 因子 A: 市值拦截 (50亿-200亿)
+    df['mkt_cap_calc'] = df['mkt_cap'] / 1e8
+    
+    # 因子 B: 物理空间 (1.5% <= 涨幅 <= 4.8%)
+    # 因子 C: 动能拦截 (1.5亿 <= 成交额 <= 8.0亿)
+    # 因子 D: 活跃拦截 (换手率 >= 5% & 量比 > 1.0)
+    strategy_mask = (df['zf'] >= 1.5) & (df['zf'] <= 4.8) & \
+                    (df['amount'] >= 150000000) & (df['amount'] <= 800000000) & \
+                    (df['mkt_cap_calc'] >= 50) & (df['mkt_cap_calc'] <= 200) & \
+                    (df['hs'] >= 5.0) & (df['lb'] > 1.0)
+    
+    res = df[strategy_mask].copy()
 
-                results.append({
-                    "代码": t,
-                    "Signal": "🚀潜伏种子" if score > 105 else "🔥异动拦截",
-                    "Score": round(score, 2),
-                    "Price": round(price, 2),
-                    "zf%": round(zf, 2),
-                    "Amount": round(amount / 1e8, 2), # 亿元显示
-                    "lb": round(lb, 2),
-                    "hs%": round(hs, 2),
-                    "Ratio": round(ratio, 0),
-                    "Buy_Anchor": round(price * 0.995, 2),
-                    "UPDATE_TIME": bj_now
-                })
+    # 4. 深度博弈算法：计算 Score 和 Ratio
+    if not res.empty:
+        # 能效比 Ratio: 每一份涨幅消耗的资金，越低越好（说明主力控盘高）
+        res['Ratio'] = res['amount'] / (res['zf'] + 0.0001)
+        
+        # 基础分：Score = 50 + (量比 * 15) + (换手 * 5)
+        res['Score'] = 50 + (res['lb'] * 15) + (res['hs'] * 5)
+        
+        # 补偿矩阵
+        # 黄金堆积 (+25): 量比 1.2-2.8 且 换手 3.0-7.5%
+        res.loc[(res['lb'] >= 1.2) & (res['lb'] <= 2.8) & (res['hs'] >= 3.0) & (res['hs'] <= 7.5), 'Score'] += 25
+        # 高度控盘 (+15): Ratio < 6500万
+        res.loc[res['Ratio'] < 65000000, 'Score'] += 15
 
-        except Exception as e:
-            print(f"标的 {t} 抓取异常: {e}")
-            continue
-
-    # --- 5. 结果输出 ---
-    if results:
-        final_df = pd.DataFrame(results).sort_values(by='Score', ascending=False)
-        final_df.to_excel(output_file, index=False)
-        print(f"筛选完成，拦截符合 10.0 矩阵标的：{len(results)} 只")
+        res['Signal'] = res['Score'].apply(lambda x: "🚀潜伏种子" if x > 105 else "🔥异动拦截")
+        res['UPDATE_TIME'] = bj_now
+        
+        # 只输出真正有博弈价值的内容
+        final = res[res['Score'] >= 85].sort_values(by='Score', ascending=False)
+        
+        if final.empty:
+            pd.DataFrame({"STATUS": ["全市场逻辑未闭环(无信号)"], "TIME": [bj_now]}).to_excel(output_file)
+        else:
+            final.to_excel(output_file, index=False)
     else:
-        # 即使为空也生成报告，带上随机哈希，强制推送
-        pd.DataFrame({
-            "STATUS": ["10.0矩阵拦截过严或池内暂无信号"], 
-            "TIME": [bj_now],
-            "HASH": [random.random()]
-        }).to_excel(output_file, index=False)
+        # 如果 10.0 矩阵没有票，说明当前市场环境极差或没有符合博弈逻辑的个股
+        pd.DataFrame({"STATUS": ["矩阵拦截过严(5000只扫描完毕)"], "TIME": [bj_now]}).to_excel(output_file)
 
 if __name__ == "__main__":
-    bot_v10_yahoo_full_strategy()
+    bot_v10_real_strategy()
