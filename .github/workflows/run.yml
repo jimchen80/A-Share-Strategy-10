@@ -3,10 +3,8 @@ name: Strategy-V10-Engine
 on:
   workflow_dispatch:
   schedule:
-    # 每天北京时间 09:35 和 14:35 自动运行（对应 UTC 1:35 和 6:35）
     - cron: '35 1,6 * * 1-5'
 
-# 核心权限开启：确保机器人有权将 index.xlsx 写回你的仓库
 permissions:
   contents: write
 
@@ -16,8 +14,6 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -25,13 +21,13 @@ jobs:
           python-version: '3.9'
 
       - name: Install Dependencies
+        # 深入思考：直接在此处强制安装所有链路库，确保环境 100% 闭环
         run: |
           python -m pip install --upgrade pip
-          # 强制安装所有必要库，解决 ModuleNotFoundError
-          pip install pandas numpy akshare efinance openpyxl
+          pip install yfinance pandas numpy openpyxl
 
       - name: Run 10.0 Strategy Engine
-        # 运行你那套具备“全时态逻辑审计”的 main.py
+        # 运行你那套已经适配了“雅虎穿透链路”的 main.py
         run: python main.py
 
       - name: Sync Results to Repo
@@ -40,14 +36,11 @@ jobs:
         run: |
           git config --global user.name "AlphaBot"
           git config --global user.email "bot@strategy10.com"
-          
-          # 检查文件是否存在，防止碎片化报错
           if [ -f index.xlsx ]; then
             git add index.xlsx
-            # 只有在内容有变动时才提交，防止 Git 流程卡死
-            git commit -m "Auto-Update: Strategy 10.0 Matrix [$(date)]" || exit 0
+            git commit -m "Auto-Update: V10 Yahoo-Link [$(date)]" || exit 0
             git push
           else
-            echo "错误：main.py 未能产出 index.xlsx，请检查代码逻辑。"
+            echo "错误：index.xlsx 未产出，请检查 main.py 逻辑。"
             exit 1
           fi
